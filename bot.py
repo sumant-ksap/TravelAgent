@@ -143,7 +143,7 @@ async def handle_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 async def main() -> None:
     config = load_config()
     memory = await Memory.connect(config.postgres_dsn)
-    ollama = OllamaClient(config.ollama_host, config.ollama_model)
+    ollama = OllamaClient(config.ollama_host, config.ollama_model, config.ollama_api_key)
     orchestrator = TravelOrchestrator(ollama, memory)
 
     application = Application.builder().token(config.telegram_token).build()

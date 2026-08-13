@@ -14,10 +14,11 @@ class OllamaClient:
     """Thin wrapper around Ollama's /api/chat, reused by every agent in the
     orchestrator with its own system prompt and its own scoped tool subset."""
 
-    def __init__(self, host: str, model: str):
+    def __init__(self, host: str, model: str, api_key: str | None = None):
         self._host = host.rstrip("/")
         self._model = model
-        self._client = httpx.AsyncClient(timeout=120.0)
+        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        self._client = httpx.AsyncClient(timeout=120.0, headers=headers)
 
     async def close(self) -> None:
         await self._client.aclose()

@@ -86,6 +86,41 @@ planning step — most modern Ollama models support this.
    python bot.py
    ```
 
+## Deploying to Render (so anyone on Telegram can use it)
+
+A Telegram long-polling bot doesn't need an HTTP port, so it runs as a Render **Background Worker**,
+with a Render **Postgres** instance for persistence. The one piece that can't run on Render as-is is
+Ollama itself: `gemma4:31b-cloud` is an Ollama *Cloud* model normally proxied through a locally
+signed-in `ollama serve`, and that interactive sign-in doesn't transfer to a headless host.
+
+The fix: skip the local Ollama proxy entirely and call **Ollama Cloud's own HTTPS API** directly -
+`ollama_client.py` already speaks Ollama's native `/api/chat` protocol, so pointing it at
+`https://ollama.com` with an `OLLAMA_API_KEY` (bearer token, no `ollama serve` involved) is a drop-in
+swap. Self-hosting the model directly on Render instead was considered and rejected: Render's
+CPU-only tiers need Pro Plus/Pro Max ($175-225/mo) just to fit an 8B model's RAM, and would still be
+slow without a GPU - Ollama Cloud is both cheaper and faster.
+
+**Before deploying**, confirm tool calling works through the cloud endpoint the same way it does
+locally (the whole specialist-agent architecture depends on it) - generate a key at
+[ollama.com/settings/keys](https://ollama.com/settings/keys) and try one real turn with
+`OLLAMA_API_HOST=https://ollama.com` and `OLLAMA_API_KEY` set locally before deploying.
+
+Steps:
+1. Push this repo to GitHub (already done) and generate an Ollama Cloud API key.
+2. In the Render dashboard: **New > Blueprint**, point it at this repo - it reads
+   [render.yaml](render.yaml) and provisions the worker + database together.
+3. Fill in the `sync: false` secrets it prompts for: `TELEGRAM_BOT_TOKEN`, `OLLAMA_API_KEY`, and
+   optionally `AMADEUS_API_KEY`/`AMADEUS_API_SECRET`. `POSTGRES_DSN` is wired automatically from the
+   provisioned database.
+4. Deploy. Check the worker's logs for `Bot started, polling for updates` with no errors.
+
+**Cost** (as of writing): Background Worker Starter $7/mo (512MB/0.5 CPU - plenty, since the LLM work
+happens on Ollama's cloud, not this process) + Postgres Basic-256mb $6/mo (the free Postgres tier
+exists but auto-deletes after 30 days, unsuitable for a bot meant to remember trips) ≈ **$13/mo**,
+plus your Ollama Cloud plan. Ollama Cloud's Free tier allows only 1 concurrent model/light usage on a
+5-hour session / 7-day rolling cap - fine for trying this out, but a bot "for anyone" under real
+multi-user load will likely need **Pro ($20/mo, 3 concurrent)** to avoid throttling strangers mid-trip.
+
 ## Security note
 
 An earlier version of this README contained a live bot token in plaintext. If that token was ever

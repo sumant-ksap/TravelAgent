@@ -1,0 +1,34 @@
+databases:
+  - name: travelagent-db
+    plan: basic-256mb
+    databaseName: travel_agent
+    user: travelagent
+
+services:
+  - type: worker
+    name: travelagent-bot
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: OLLAMA_API_HOST
+        value: https://ollama.com
+      - key: OLLAMA_API_KEY
+        sync: false
+      - key: OLLAMA_MODEL
+        value: gemma4:31b-cloud
+      - key: HISTORY_LIMIT
+        value: "20"
+      - key: POSTGRES_DSN
+        fromDatabase:
+          name: travelagent-db
+          property: connectionString
+      # Optional - leave unset in the dashboard to keep Flight/Hotel agents
+      # on web-search-based research instead of live fares.
+      - key: AMADEUS_API_KEY
+        sync: false
+      - key: AMADEUS_API_SECRET
+        sync: false
