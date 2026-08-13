@@ -88,38 +88,60 @@ planning step — most modern Ollama models support this.
 
 ## Deploying to Render (so anyone on Telegram can use it)
 
-A Telegram long-polling bot doesn't need an HTTP port, so it runs as a Render **Background Worker**,
-with a Render **Postgres** instance for persistence. The one piece that can't run on Render as-is is
-Ollama itself: `gemma4:31b-cloud` is an Ollama *Cloud* model normally proxied through a locally
-signed-in `ollama serve`, and that interactive sign-in doesn't transfer to a headless host.
+The one piece that can't run on Render as-is is Ollama itself: `gemma4:31b-cloud` is an Ollama
+*Cloud* model normally proxied through a locally signed-in `ollama serve`, and that interactive
+sign-in doesn't transfer to a headless host.
 
 The fix: skip the local Ollama proxy entirely and call **Ollama Cloud's own HTTPS API** directly -
 `ollama_client.py` already speaks Ollama's native `/api/chat` protocol, so pointing it at
 `https://ollama.com` with an `OLLAMA_API_KEY` (bearer token, no `ollama serve` involved) is a drop-in
-swap. Self-hosting the model directly on Render instead was considered and rejected: Render's
-CPU-only tiers need Pro Plus/Pro Max ($175-225/mo) just to fit an 8B model's RAM, and would still be
-slow without a GPU - Ollama Cloud is both cheaper and faster.
+swap - verified working end-to-end, including tool calling. Self-hosting the model directly on
+Render instead was considered and rejected: Render's CPU-only tiers need Pro Plus/Pro Max
+($175-225/mo) just to fit an 8B model's RAM, and would still be slow without a GPU.
 
 **Before deploying**, confirm tool calling works through the cloud endpoint the same way it does
 locally (the whole specialist-agent architecture depends on it) - generate a key at
 [ollama.com/settings/keys](https://ollama.com/settings/keys) and try one real turn with
 `OLLAMA_API_HOST=https://ollama.com` and `OLLAMA_API_KEY` set locally before deploying.
 
+### Free ($0/mo) setup
+
+[render.yaml](render.yaml) currently targets Render's free tier, with real tradeoffs:
+
+- Render's free tier only exists for **Web Services**, not Background Workers - but a Telegram
+  long-polling bot doesn't open a port on its own. `bot.py` starts a trivial stdlib HTTP server
+  (`start_health_server_if_needed`) *only* when a `PORT` env var is present (which Render's Web
+  Services set automatically), purely so Render considers the process a valid, healthy web service.
+  It's a no-op locally and on a real worker.
+- Free Web Services **sleep after 15 minutes with no HTTP request** - and Telegram polling doesn't
+  count as one. Any message that arrives while asleep waits ~30-60s for a cold start before it's
+  even seen. To keep it awake, point a free external uptime pinger (e.g. UptimeRobot,
+  cron-job.org) at your Render URL every ~10 minutes. This is a workaround, not a real fix.
+- Free Postgres **deletes all data after 30 days** - trip history and remembered preferences will
+  periodically vanish, and you'll need to create a fresh free database and update `POSTGRES_DSN`
+  in the Render dashboard each time (Render emails a warning first).
+
 Steps:
 1. Push this repo to GitHub (already done) and generate an Ollama Cloud API key.
-2. In the Render dashboard: **New > Blueprint**, point it at this repo - it reads
-   [render.yaml](render.yaml) and provisions the worker + database together.
+2. In the Render dashboard: **New > Blueprint**, point it at this repo - it reads `render.yaml` and
+   provisions the web service + free database together.
 3. Fill in the `sync: false` secrets it prompts for: `TELEGRAM_BOT_TOKEN`, `OLLAMA_API_KEY`, and
-   optionally `AMADEUS_API_KEY`/`AMADEUS_API_SECRET`. `POSTGRES_DSN` is wired automatically from the
-   provisioned database.
-4. Deploy. Check the worker's logs for `Bot started, polling for updates` with no errors.
+   optionally `AMADEUS_API_KEY`/`AMADEUS_API_SECRET`. `POSTGRES_DSN` is wired automatically.
+4. Deploy. Check the logs for `Bot started, polling for updates` with no errors.
+5. Set up an external uptime pinger against the service's `.onrender.com` URL if you want it to
+   actually stay responsive between messages.
 
-**Cost** (as of writing): Background Worker Starter $7/mo (512MB/0.5 CPU - plenty, since the LLM work
-happens on Ollama's cloud, not this process) + Postgres Basic-256mb $6/mo (the free Postgres tier
-exists but auto-deletes after 30 days, unsuitable for a bot meant to remember trips) ≈ **$13/mo**,
-plus your Ollama Cloud plan. Ollama Cloud's Free tier allows only 1 concurrent model/light usage on a
-5-hour session / 7-day rolling cap - fine for trying this out, but a bot "for anyone" under real
-multi-user load will likely need **Pro ($20/mo, 3 concurrent)** to avoid throttling strangers mid-trip.
+### Paid (~$13/mo) always-on setup
+
+Once you've validated it and want something reliable for strangers to actually use, switch to a
+**Background Worker** (no sleep, no health-check hack needed) and a **paid Postgres** (no 30-day
+wipe): in `render.yaml`, change the service's `type` to `worker` and `plan` to `starter` (and drop
+`healthCheckPath`), and the database's `plan` to e.g. `basic-256mb`.
+
+**Cost**: Background Worker Starter $7/mo + Postgres Basic-256mb $6/mo ≈ **$13/mo**, plus your
+Ollama Cloud plan. Ollama Cloud's Free tier allows only 1 concurrent model/light usage on a 5-hour
+session / 7-day rolling cap - fine for trying this out, but a bot "for anyone" under real multi-user
+load will likely need **Pro ($20/mo, 3 concurrent)** to avoid throttling strangers mid-trip.
 
 ## Security note
 

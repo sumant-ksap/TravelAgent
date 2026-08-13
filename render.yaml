@@ -1,14 +1,21 @@
+# Free-tier setup: $0/mo on Render, with real tradeoffs (see the README's
+# "Deploying to Render" section) - the free Postgres wipes all data after 30
+# days, and the free Web Service sleeps after 15 min idle unless something
+# pings it. To upgrade to an always-on paid setup later, change the service's
+# `type` to `worker` and `plan` to `starter`, and the database's `plan` to
+# something like `basic-256mb` (a worker needs no healthCheckPath/PORT).
 databases:
   - name: travelagent-db
-    plan: basic-256mb
+    plan: free
     databaseName: travel_agent
     user: travelagent
 
 services:
-  - type: worker
+  - type: web
     name: travelagent-bot
     runtime: python
-    plan: starter
+    plan: free
+    healthCheckPath: /
     buildCommand: pip install -r requirements.txt
     startCommand: python bot.py
     envVars:

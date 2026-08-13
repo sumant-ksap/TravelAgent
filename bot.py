@@ -1,6 +1,9 @@
 import asyncio
 import json
 import logging
+import os
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
@@ -12,6 +15,32 @@ from orchestrator import TravelOrchestrator, default_trip_state
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
+
+
+class _HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"ok")
+
+    def log_message(self, format, *args) -> None:  # noqa: A002 - stdlib signature
+        pass  # keep health-check/keep-alive pings out of the app log
+
+
+def start_health_server_if_needed() -> ThreadingHTTPServer | None:
+    """Telegram long-polling itself needs no open port. This exists only for
+    hosts (like Render's free Web Service tier) that require the process to
+    bind $PORT and answer HTTP - both for their own health check and to give
+    an external uptime pinger something to hit to prevent idle sleep. A no-op
+    unless PORT is set, so local runs and paid Background Workers are unaffected."""
+    port = os.getenv("PORT")
+    if not port:
+        return None
+    server = ThreadingHTTPServer(("0.0.0.0", int(port)), _HealthCheckHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    logger.info("Health check server listening on port %s", port)
+    return server
 
 TELEGRAM_MESSAGE_LIMIT = 4096
 TRIP_DUMP_MAX_CHARS = 8000
@@ -141,6 +170,7 @@ async def handle_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def main() -> None:
+    health_server = start_health_server_if_needed()
     config = load_config()
     memory = await Memory.connect(config.postgres_dsn)
     ollama = OllamaClient(config.ollama_host, config.ollama_model, config.ollama_api_key)
@@ -169,6 +199,8 @@ async def main() -> None:
         await application.shutdown()
         await ollama.close()
         await memory.close()
+        if health_server is not None:
+            health_server.shutdown()
 
 
 if __name__ == "__main__":
