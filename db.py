@@ -1,6 +1,11 @@
+import asyncio
 import json
+import logging
+import socket
 
 import asyncpg
+
+logger = logging.getLogger(__name__)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS messages (
@@ -31,8 +36,23 @@ class Memory:
         self._pool = pool
 
     @classmethod
-    async def connect(cls, dsn: str) -> "Memory":
-        pool = await asyncpg.create_pool(dsn)
+    async def connect(cls, dsn: str, attempts: int = 10, delay: float = 3.0) -> "Memory":
+        # On a fresh Render Blueprint deploy the bot can boot before the
+        # database finishes provisioning, so its internal hostname doesn't
+        # resolve yet - retry with backoff instead of crashing on startup.
+        for attempt in range(1, attempts + 1):
+            try:
+                pool = await asyncpg.create_pool(dsn)
+                break
+            except (OSError, socket.gaierror, asyncpg.CannotConnectNowError) as exc:
+                if attempt == attempts:
+                    raise
+                logger.warning(
+                    "Postgres not reachable (attempt %d/%d): %s - retrying in %.0fs",
+                    attempt, attempts, exc, delay,
+                )
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, 30)
         async with pool.acquire() as conn:
             await conn.execute(SCHEMA)
         return cls(pool)
